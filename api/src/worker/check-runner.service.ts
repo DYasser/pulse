@@ -58,7 +58,12 @@ export class CheckRunnerService {
     if (result.ok) {
       await this.resolveOpenIncident(monitor.id, check.checkedAt);
     } else {
-      await this.recordFailure(monitor.id, result.error, check.checkedAt);
+      await this.recordFailure(
+        monitor.id,
+        result.error,
+        check.checkedAt,
+        monitor.intervalSec,
+      );
     }
 
     return check;
@@ -106,6 +111,7 @@ export class CheckRunnerService {
     monitorId: string,
     cause: string | null,
     at: Date,
+    intervalSec: number,
   ): Promise<void> {
     const open = await this.prisma.incident.findFirst({
       where: { monitorId, resolvedAt: null },
@@ -119,8 +125,17 @@ export class CheckRunnerService {
       return;
     }
 
+    // Bounded in time as well as in count. Without the window, a monitor paused
+    // for a month with one failing check as its last record would, on being
+    // unpaused, treat that month-old failure as "consecutive" with the new one and
+    // open an incident whose startedAt is meaningless. The allowance is generous -
+    // several intervals - so a slow monitor still accumulates a streak.
+    const windowStart = new Date(
+      at.getTime() - intervalSec * 1000 * (this.failureThreshold + 1),
+    );
+
     const recent = await this.prisma.check.findMany({
-      where: { monitorId },
+      where: { monitorId, checkedAt: { gte: windowStart } },
       orderBy: { checkedAt: 'desc' },
       take: this.failureThreshold,
       select: { ok: true },
@@ -135,7 +150,8 @@ export class CheckRunnerService {
           monitorId,
           startedAt: at,
           cause,
-          failureCount: this.failureThreshold,
+          // The count of failures that actually opened this incident.
+          failureCount: recent.length,
         },
       });
       this.logger.warn(`Monitor ${monitorId} is down: ${cause ?? 'unknown'}`);

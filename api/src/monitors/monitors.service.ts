@@ -1,6 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Monitor } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { AddressGuardService } from '../worker/address-guard.service';
 import { CreateMonitorDto } from './dto/create-monitor.dto';
 import { UpdateMonitorDto } from './dto/update-monitor.dto';
 
@@ -14,12 +19,43 @@ export interface MonitorSummary extends Monitor {
 
 @Injectable()
 export class MonitorsService {
-  constructor(private readonly prisma: PrismaService) {}
+  /** Ceiling on monitors per account, so one user cannot consume every sweep. */
+  private readonly MAX_MONITORS_PER_USER = 50;
 
-  create(userId: string, dto: CreateMonitorDto): Promise<Monitor> {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly addressGuard: AddressGuardService,
+  ) {}
+
+  async create(userId: string, dto: CreateMonitorDto): Promise<Monitor> {
+    await this.assertAddressAllowed(dto.url);
+
+    const existing = await this.prisma.monitor.count({ where: { userId } });
+    if (existing >= this.MAX_MONITORS_PER_USER) {
+      throw new BadRequestException(
+        `A single account may have at most ${this.MAX_MONITORS_PER_USER} monitors`,
+      );
+    }
+
     return this.prisma.monitor.create({
       data: { ...dto, userId },
     });
+  }
+
+  /**
+   * Refuses a URL that resolves into private space.
+   *
+   * The prober checks again at probe time - it has to, because DNS can be
+   * repointed after the monitor is created - but rejecting it here means the user
+   * gets told why instead of watching every check fail for an opaque reason.
+   */
+  private async assertAddressAllowed(url: string): Promise<void> {
+    const verdict = await this.addressGuard.check(url);
+    if (!verdict.allowed) {
+      throw new BadRequestException(
+        verdict.reason ?? 'That URL cannot be monitored',
+      );
+    }
   }
 
   /**
@@ -51,6 +87,9 @@ export class MonitorsService {
     dto: UpdateMonitorDto,
   ): Promise<Monitor> {
     await this.findOne(userId, id);
+    if (dto.url) {
+      await this.assertAddressAllowed(dto.url);
+    }
     return this.prisma.monitor.update({ where: { id }, data: dto });
   }
 
@@ -66,7 +105,7 @@ export class MonitorsService {
     return this.prisma.check.findMany({
       where: { monitorId: id },
       orderBy: { checkedAt: 'desc' },
-      take: Math.min(limit, 200),
+      take: Math.min(Math.max(limit, 1), 200),
     });
   }
 
@@ -76,7 +115,7 @@ export class MonitorsService {
     return this.prisma.incident.findMany({
       where: { monitorId: id },
       orderBy: { startedAt: 'desc' },
-      take: Math.min(limit, 100),
+      take: Math.min(Math.max(limit, 1), 100),
     });
   }
 

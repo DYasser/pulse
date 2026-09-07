@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ProberService } from './prober.service';
+import { AddressGuardService } from './address-guard.service';
 import { CheckRunnerService } from './check-runner.service';
 import { SchedulerService } from './scheduler.service';
 
@@ -12,10 +13,11 @@ import { SchedulerService } from './scheduler.service';
  */
 @Module({
   providers: [
+    AddressGuardService,
     ProberService,
     CheckRunnerService,
     ...(process.env.WORKER_ENABLED === 'false' ? [] : [SchedulerService]),
   ],
-  exports: [ProberService, CheckRunnerService],
+  exports: [ProberService, CheckRunnerService, AddressGuardService],
 })
 export class WorkerModule {}

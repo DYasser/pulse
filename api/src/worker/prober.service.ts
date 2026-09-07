@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { AddressGuardService } from './address-guard.service';
 
 /** The outcome of a single probe. */
 export interface ProbeResult {
@@ -21,6 +22,23 @@ export class ProberService {
   private readonly logger = new Logger(ProberService.name);
 
   /**
+   * Redirects are followed by hand so every hop can be re-checked against the
+   * address guard. `redirect: 'follow'` would let a public URL bounce the probe
+   * into private space - the classic SSRF bypass, since validating the submitted
+   * URL says nothing about where it points next.
+   */
+  private readonly MAX_REDIRECTS = 5;
+
+  /**
+   * The body is drained so the socket can be reused, but only this much of it.
+   * Reading an unbounded response into memory is a denial of service against a
+   * 512MB machine, and the content is irrelevant here - only the status matters.
+   */
+  private readonly MAX_BODY_BYTES = 64 * 1024;
+
+  constructor(private readonly addressGuard: AddressGuardService) {}
+
+  /**
    * A probe never throws. Every failure mode - timeout, DNS, TLS, refused
    * connection, unexpected status - comes back as a result with ok: false, because
    * "the site is down" is a normal outcome for this service, not an exception.
@@ -35,31 +53,45 @@ export class ProberService {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        signal: controller.signal,
-        redirect: 'follow',
-        headers: {
-          // Identify the prober. Some sites block unknown agents outright, and an
-          // honest UA is better manners than pretending to be a browser.
-          'User-Agent':
-            'Pulse-Uptime-Monitor/1.0 (+https://github.com/DYasser/pulse)',
-          Accept: '*/*',
-        },
-      });
+      const response = await this.fetchFollowingRedirects(
+        url,
+        controller.signal,
+      );
 
-      // Drain the body so the socket can be reused and a huge page cannot be held
-      // in memory. The content is irrelevant - only the status matters.
-      await response.arrayBuffer().catch(() => undefined);
+      if ('refused' in response) {
+        return {
+          ok: false,
+          statusCode: null,
+          responseMs: Date.now() - startedAt,
+          error: response.refused,
+        };
+      }
+
+      await this.drain(response.value);
+
+      // Checked after the drain, not before. A site can answer with headers
+      // promptly and then hang mid-body - a real degradation for a page that
+      // flushes headers before querying a database. The status line says 200, so
+      // without this the probe would report the site as up and the measured
+      // latency would silently be the timeout value rather than a response time.
+      if (controller.signal.aborted) {
+        return {
+          ok: false,
+          statusCode: response.value.status,
+          responseMs: Date.now() - startedAt,
+          error: `Response body did not complete within ${timeoutMs}ms`,
+        };
+      }
 
       const responseMs = Date.now() - startedAt;
-      const ok = response.status === expectedStatus;
+      const ok = response.value.status === expectedStatus;
+      const status = response.value.status;
 
       return {
         ok,
-        statusCode: response.status,
+        statusCode: status,
         responseMs,
-        error: ok ? null : `Expected ${expectedStatus}, got ${response.status}`,
+        error: ok ? null : `Expected ${expectedStatus}, got ${status}`,
       };
     } catch (error) {
       const responseMs = Date.now() - startedAt;
@@ -73,6 +105,94 @@ export class ProberService {
       };
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Fetches, re-checking the address guard at every hop.
+   *
+   * Returns either the final response or the reason the probe was refused. A
+   * refusal is not an error: a monitor pointed somewhere it may not go should
+   * report that as a failed check, the same as a site being down.
+   */
+  private async fetchFollowingRedirects(
+    url: string,
+    signal: AbortSignal,
+  ): Promise<{ value: Response } | { refused: string }> {
+    let current = url;
+
+    for (let hop = 0; hop <= this.MAX_REDIRECTS; hop++) {
+      const verdict = await this.addressGuard.check(current);
+      if (!verdict.allowed) {
+        return {
+          refused:
+            hop === 0
+              ? (verdict.reason ?? 'Address is not allowed')
+              : `Redirected to an address that is not publicly routable`,
+        };
+      }
+
+      const response = await fetch(current, {
+        method: 'GET',
+        signal,
+        // Manual, so each Location can be guarded before it is followed.
+        redirect: 'manual',
+        headers: {
+          // Identify the prober. Some sites block unknown agents outright, and an
+          // honest UA is better manners than pretending to be a browser.
+          'User-Agent':
+            'Pulse-Uptime-Monitor/1.0 (+https://github.com/DYasser/pulse)',
+          Accept: '*/*',
+        },
+      });
+
+      const location = response.headers.get('location');
+      const isRedirect = response.status >= 300 && response.status < 400;
+
+      if (!isRedirect || !location) {
+        return { value: response };
+      }
+
+      // Don't leave the body of an intermediate response unread.
+      await this.drain(response);
+
+      try {
+        current = new URL(location, current).toString();
+      } catch {
+        return { refused: 'Redirected to a URL that could not be parsed' };
+      }
+    }
+
+    return { refused: `More than ${this.MAX_REDIRECTS} redirects` };
+  }
+
+  /**
+   * Reads and discards up to MAX_BODY_BYTES so the connection can be reused,
+   * then cancels the rest. Reading it all would let a large response exhaust
+   * memory, and nothing here needs the content.
+   */
+  private async drain(response: Response): Promise<void> {
+    if (!response.body) {
+      return;
+    }
+
+    const reader = response.body.getReader();
+    let read = 0;
+
+    try {
+      while (read < this.MAX_BODY_BYTES) {
+        const { done, value } = await reader.read();
+        if (done) {
+          return;
+        }
+        read += value.byteLength;
+      }
+      await reader.cancel();
+    } catch {
+      // A truncated or reset body does not change the verdict - the status is
+      // what matters, and it has already been read.
+    } finally {
+      reader.releaseLock();
     }
   }
 

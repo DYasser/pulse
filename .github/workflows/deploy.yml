@@ -1,0 +1,48 @@
+name: Deploy
+
+# Runs only after CI has passed on main, so a red build is never deployed.
+on:
+  workflow_run:
+    workflows: ['CI']
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to Fly.io
+    runs-on: ubuntu-latest
+    # workflow_dispatch has no workflow_run context, hence the second clause.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          github.event.workflow_run.conclusion == 'success' }}
+
+    concurrency:
+      # Two deploys racing would fight over the same machine.
+      group: deploy-production
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # Migrations run on container start via `prisma migrate deploy`, so there is
+      # no separate migration step here. deploy only applies committed migrations -
+      # it never generates or resets.
+      - name: Deploy
+        run: flyctl deploy --remote-only --config fly.toml
+        working-directory: api
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Verify the deployment answers
+        run: |
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://pulse-uptime.fly.dev/api/health || true)
+            if [ "$code" = "200" ]; then echo "healthy"; exit 0; fi
+            echo "attempt $i: HTTP $code"
+            sleep 10
+          done
+          echo "health check never returned 200"
+          exit 1

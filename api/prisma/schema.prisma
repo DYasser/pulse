@@ -87,4 +87,10 @@ model Incident {
   // Finding a monitor's open incident is the worker's most frequent lookup.
   @@index([monitorId, resolvedAt])
   @@map("incidents")
+
+  // A partial unique index enforcing "at most one open incident per monitor" is
+  // added by hand in the migration - Prisma cannot express a WHERE clause on an
+  // index. Without it, two workers racing can both find no open incident and both
+  // insert one, and resolveOpenIncident closes only the first: the orphan stays
+  // open forever and the monitor reads as permanently down.
 }

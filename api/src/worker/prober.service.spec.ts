@@ -1,6 +1,7 @@
 import { createServer, Server } from 'http';
 import { AddressInfo } from 'net';
 import { ProberService } from './prober.service';
+import { AddressGuardService } from './address-guard.service';
 
 /**
  * The prober, against a real HTTP server on localhost.
@@ -18,7 +19,11 @@ describe('ProberService', () => {
   let handler: (respond: (status: number, body?: string) => void) => void;
 
   beforeAll(async () => {
-    prober = new ProberService();
+    // 127.0.0.1 is what these tests probe, so the guard is stubbed open here.
+    // The guard's own rules are covered in address-guard.service.spec.ts.
+    prober = new ProberService({
+      check: () => Promise.resolve({ allowed: true }),
+    } as unknown as AddressGuardService);
 
     server = createServer((_req, res) => {
       handler((status, body = 'ok') => {

@@ -4,6 +4,7 @@ import request from 'supertest';
 import type { Server } from 'http';
 import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
+import { AllExceptionsFilter } from '../common/all-exceptions.filter';
 
 /**
  * The API over HTTP, against a real database.
@@ -21,6 +22,9 @@ describe('Monitors API', () => {
     // The scheduler would probe real URLs mid-test; disabled via the same switch
     // production uses to run API-only instances.
     process.env.WORKER_ENABLED = 'false';
+    // These cases register many users from one address; the rate limits have
+    // their own spec.
+    process.env.THROTTLE_DISABLED = 'true';
 
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
@@ -36,6 +40,9 @@ describe('Monitors API', () => {
         transformOptions: { enableImplicitConversion: true },
       }),
     );
+    // Same filter main.ts installs, so these cases exercise the real error
+    // handling rather than Nest's default.
+    app.useGlobalFilters(new AllExceptionsFilter());
     await app.init();
 
     prisma = moduleRef.get(PrismaService);
@@ -277,6 +284,75 @@ describe('Monitors API', () => {
           url: 'https://example.com',
           userId: 'some-other-user',
         })
+        .expect(400);
+    });
+
+    it('refuses a URL pointing at cloud metadata', async () => {
+      // The reason AddressGuardService exists: class-validator's IsUrl with
+      // require_tld accepts this, and the server fetches whatever it is given.
+      const token = await registerUser();
+
+      await http()
+        .post('/api/monitors')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          name: 'Metadata',
+          url: 'http://169.254.169.254/latest/meta-data/',
+        })
+        .expect(400);
+    });
+
+    it('refuses URLs pointing into private space', async () => {
+      const token = await registerUser();
+
+      for (const url of [
+        'http://10.0.0.1/',
+        'http://192.168.1.1/',
+        'http://127.0.0.1:5432/',
+        'http://172.16.0.1/',
+      ]) {
+        await http()
+          .post('/api/monitors')
+          .set('Authorization', `Bearer ${token}`)
+          .send({ name: 'Internal', url })
+          .expect(400);
+      }
+    });
+
+    it('refuses to be repointed at private space by an update', async () => {
+      // Otherwise the create-time check is bypassed by creating a public monitor
+      // and then patching its URL.
+      const token = await registerUser();
+      const monitor = await createMonitor(token);
+
+      await http()
+        .patch(`/api/monitors/${monitor.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ url: 'http://169.254.169.254/' })
+        .expect(400);
+    });
+
+    it('rejects a limit that is not a number', async () => {
+      // Number('abc') is NaN, and Prisma's take: NaN throws - a 500 where a 400
+      // belongs.
+      const token = await registerUser();
+      const monitor = await createMonitor(token);
+
+      await http()
+        .get(`/api/monitors/${monitor.id}/checks?limit=abc`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(400);
+    });
+
+    it('rejects a negative limit rather than reading backwards', async () => {
+      // Prisma treats a negative take as reverse pagination, so this would
+      // silently return the oldest checks instead of the newest.
+      const token = await registerUser();
+      const monitor = await createMonitor(token);
+
+      await http()
+        .get(`/api/monitors/${monitor.id}/checks?limit=-5`)
+        .set('Authorization', `Bearer ${token}`)
         .expect(400);
     });
 

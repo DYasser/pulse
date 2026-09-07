@@ -18,6 +18,7 @@ import { UpdateMonitorDto } from './dto/update-monitor.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { RequestUser } from '../auth/jwt.strategy';
+import { ParseLimitPipe } from '../common/parse-limit.pipe';
 
 @Controller('monitors')
 @UseGuards(JwtAuthGuard) // every route here requires a token
@@ -52,26 +53,20 @@ export class MonitorsController {
   findChecks(
     @CurrentUser() user: RequestUser,
     @Param('id', ParseUUIDPipe) id: string,
-    @Query('limit') limit?: string,
+    // Parsed rather than coerced: Number('abc') is NaN, and Prisma's take: NaN
+    // throws a 500 where a 400 belongs.
+    @Query('limit', new ParseLimitPipe(50, 200)) limit: number,
   ) {
-    return this.monitors.findChecks(
-      user.id,
-      id,
-      limit ? Number(limit) : undefined,
-    );
+    return this.monitors.findChecks(user.id, id, limit);
   }
 
   @Get(':id/incidents')
   findIncidents(
     @CurrentUser() user: RequestUser,
     @Param('id', ParseUUIDPipe) id: string,
-    @Query('limit') limit?: string,
+    @Query('limit', new ParseLimitPipe(20, 100)) limit: number,
   ) {
-    return this.monitors.findIncidents(
-      user.id,
-      id,
-      limit ? Number(limit) : undefined,
-    );
+    return this.monitors.findIncidents(user.id, id, limit);
   }
 
   @Patch(':id')

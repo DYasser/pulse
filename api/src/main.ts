@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, Logger } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { AllExceptionsFilter } from './common/all-exceptions.filter';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
@@ -18,8 +19,16 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
+  app.useGlobalFilters(new AllExceptionsFilter());
+
+  // Fail closed. `origin: true` reflects whatever Origin asked, which is the wrong
+  // default for a public deployment; an unset CORS_ORIGIN means same-origin only.
+  const allowedOrigins = process.env.CORS_ORIGIN?.split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
   app.enableCors({
-    origin: process.env.CORS_ORIGIN?.split(',') ?? true,
+    origin: allowedOrigins ?? false,
     credentials: true,
   });
 
@@ -29,4 +38,11 @@ async function bootstrap(): Promise<void> {
   await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
 }
 
-void bootstrap();
+// Without this a bootstrap failure - an unset JWT_SECRET, an unreachable database -
+// becomes an unhandled rejection, and the reason is buried in a crash loop.
+bootstrap().catch((error: unknown) => {
+  new Logger('Bootstrap').error(
+    error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+  );
+  process.exit(1);
+});

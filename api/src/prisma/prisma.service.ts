@@ -36,6 +36,12 @@ export class PrismaService
    * Truncate rather than delete so cascades are honoured in one statement.
    */
   async truncateAll(): Promise<void> {
+    // Guarded rather than merely documented: this ships in the production image
+    // and every service holds a reference to this singleton.
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('truncateAll is not available in production');
+    }
+
     await this.$executeRawUnsafe(
       'TRUNCATE TABLE "incidents", "checks", "monitors", "users" RESTART IDENTITY CASCADE',
     );

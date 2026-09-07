@@ -114,7 +114,7 @@ Neither would have been caught by a unit test with a mocked database or a stubbe
 
 ## Testing
 
-56 tests. No mocked database and no stubbed HTTP:
+90 tests. No mocked database and no stubbed HTTP:
 
 - **`check-runner.service.spec.ts`** — incident derivation against real Postgres.
   The prober is the one thing stubbed, because the cases are about what a *sequence*
@@ -124,7 +124,13 @@ Neither would have been caught by a unit test with a mocked database or a stubbe
 - **`scheduler.service.spec.ts`** — which monitors a sweep picks up, including the
   interval arithmetic, which only means anything against a real database.
 - **`monitors.e2e-spec.ts`** — the API over HTTP through the real pipeline:
-  validation, guards, serialisation. This is where a missing guard shows up.
+  validation, guards, serialisation. This is where a missing guard shows up, and
+  where the SSRF rejections are asserted end to end.
+- **`address-guard.service.spec.ts`** — every address range that must be refused,
+  including the ones `IsUrl` waves through.
+- **`throttling.e2e-spec.ts`** — the rate limits, with throttling deliberately
+  left on, because the API suite turns it off and a broken limit would otherwise
+  pass CI unnoticed.
 
 The suite runs against a separate `pulse_test` database so a test run cannot truncate
 data you were looking at.
@@ -144,8 +150,30 @@ Small things, all deliberate:
 - **Unknown request fields are rejected**, not ignored — otherwise a client could
   send `userId` and create a monitor belonging to somebody else. There is a test for
   exactly that.
-- **URLs must be public http(s).** The server fetches whatever it is given, so
-  without this the service is an SSRF vector into anything it can reach.
+- **URLs are checked against the resolved address, not the hostname.** The server
+  fetches whatever it is given, which makes this an SSRF vector unless something
+  stops it reaching private space - and `class-validator`'s `IsUrl` with
+  `require_tld` does **not**: it rejects `http://localhost/` but happily accepts
+  `http://169.254.169.254/` (cloud metadata), `http://10.0.0.1/` and
+  `http://127.0.0.1:5432/`. `AddressGuardService` resolves the hostname and refuses
+  loopback, link-local, the private ranges, CGNAT, IPv6 loopback/link-local/ULA,
+  and both spellings of IPv4-mapped IPv6 - the WHATWG URL parser rewrites
+  `::ffff:10.0.0.1` as `::ffff:a00:1`, so matching only the dotted form misses it.
+- **Redirects are followed by hand, re-checking every hop.** `redirect: 'follow'`
+  lets a fully public URL bounce the probe into private space, which bypasses any
+  amount of create-time validation. The check also runs again at probe time, not
+  just at creation, because DNS can be repointed afterwards.
+- **The response body is capped at 64KB.** `arrayBuffer()` buffers the *entire*
+  body before resolving, so a large response is a denial of service against a
+  512MB machine - ten concurrent probes at a few hundred MB each. The status is all
+  this needs, so the stream is read to the cap and cancelled.
+- **Rate limits on auth.** Login costs a deliberate cost-12 bcrypt even for an
+  address that does not exist, which makes the timing-equalisation that prevents
+  enumeration into a CPU amplifier. Ten logins a minute, five registrations an
+  hour, and fifty monitors per account.
+- **A partial unique index enforces one open incident per monitor.** The worker's
+  check-then-insert is not transactional, so two processes could each open one and
+  the resolver would close only the first, leaving a monitor down forever.
 
 ## Running it
 
@@ -160,7 +188,7 @@ npm run start:dev                # http://localhost:3000/api
 
 ```bash
 npm run lint
-npm test                         # 56 tests, needs the database up
+npm test                         # 90 tests, needs the database up
 npm run build
 docker build -t pulse-api ./     # same image CI builds
 ```
@@ -198,8 +226,12 @@ Stated rather than hidden:
   deduplication story rather than just an SMTP call.
 - **No front end yet.** The API and worker are the point of this repo; a thin
   dashboard is planned, deliberately thin.
-- **Not deployed yet.** Runs in Docker against Postgres locally and in CI; a Fly.io
-  deploy is next.
-- **The scheduler assumes one worker.** Two instances with the worker enabled would
-  both probe. `WORKER_ENABLED` is the current answer; a real fix is a locking queue.
-- **No rate limiting on auth.** Fine for a single user, not for a public deployment.
+- **The scheduler assumes one worker.** `WORKER_ENABLED=false` on extra instances
+  is a deploy-time convention, not enforcement: two machines with the worker on
+  would both probe. The partial unique index prevents the worst outcome
+  (duplicate open incidents), but the honest fix is claiming due monitors with
+  `SELECT ... FOR UPDATE SKIP LOCKED` rather than select-then-stamp.
+- **DNS rebinding is only mitigated, not solved.** The address guard resolves and
+  checks at create time and again at probe time, but a name with a one-second TTL
+  can still change between the check and the connection. Closing that properly
+  needs a custom undici agent validating the address at connect time.
