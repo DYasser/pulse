@@ -44,4 +44,8 @@ EXPOSE 3000
 # never generates or resets - and takes an advisory lock, so concurrent machines
 # serialise rather than corrupt. Fly runs it once via release_command as well;
 # this covers a machine that starts outside a deploy.
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main.js"]
+# Migrations are applied once per deploy by Fly's release_command, so the app
+# process only starts the server. Running them here as well raced with that and,
+# through a connection pooler, could block on an advisory lock the pooler had kept
+# alive past the process that took it.
+CMD ["node", "dist/main.js"]

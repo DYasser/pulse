@@ -54,7 +54,12 @@ primary_region = 'yyz' # Toronto
 # Migrations run once per deploy in their own short-lived machine, rather than
 # racing across every instance on boot.
 [deploy]
-  release_command = 'npx prisma migrate deploy'
+  # PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK: the migration lock is session-scoped, and Neon's
+  # pooler keeps the server connection alive after the client disconnects, so an
+  # orphaned lock outlives the process that took it and every later deploy times
+  # out waiting for it. The lock exists to stop concurrent migrators; the
+  # release_command is a single short-lived machine, so there are none.
+  release_command = 'sh -c "PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK=true npx prisma migrate deploy"'
   # With one machine there is nothing to roll: immediate replaces it in place
   # rather than waiting for a second machine that will never exist. Fly warns that
   # max_unavailable is meaningless without a rolling strategy, so it is gone.
