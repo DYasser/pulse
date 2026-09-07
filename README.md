@@ -4,6 +4,8 @@ An uptime monitor. You register URLs; a background worker probes them on their o
 schedules, records every result, and turns streaks of failures into incidents you can
 read as periods of downtime rather than a pile of events.
 
+[![CI](https://github.com/DYasser/pulse/actions/workflows/ci.yml/badge.svg)](https://github.com/DYasser/pulse/actions/workflows/ci.yml)
+
 NestJS · TypeScript · PostgreSQL · Prisma · Docker
 
 ---
