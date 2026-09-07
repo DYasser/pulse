@@ -17,7 +17,7 @@ NestJS · TypeScript · PostgreSQL · Prisma · Docker
 A monitor cannot be a front-end. Something has to be awake at 3am probing your URLs
 while your laptop is closed, which rules out the browser, static hosting, and
 anything that only runs while someone is looking at it. The server is the premise,
-not a design choice — that is exactly why I built this one.
+not a design choice, that is exactly why I built this one.
 
 The interesting problems are all on that side: deciding what is due without
 recomputing history, probing arbitrary URLs that time out and lie and hang, and
@@ -32,12 +32,12 @@ users ──< monitors ──< checks
                    └──< incidents
 ```
 
-- **`monitors`** — a URL, how often to probe it, what status counts as healthy, and
+- **`monitors`**, a URL, how often to probe it, what status counts as healthy, and
   `last_checked_at` so the scheduler can find stale ones with an index rather than a
   scan.
-- **`checks`** — one row per probe. Status code, response time, and on failure the
+- **`checks`**, one row per probe. Status code, response time, and on failure the
   reason, so a red row explains itself.
-- **`incidents`** — a period of downtime. Nobody wants to read 288 daily check rows
+- **`incidents`**, a period of downtime. Nobody wants to read 288 daily check rows
   to learn a site went down at 14:32, so consecutive failures are collapsed into an
   incident with a start, an end, and a cause.
 
@@ -49,7 +49,7 @@ the scheduler's hot path, `(monitor_id, checked_at)` for history, and
 
 **One failure is not an outage.** A dropped packet or a deploy restarting would
 otherwise page you at 3am. An incident opens only after `FAILURE_THRESHOLD`
-consecutive failures — two by default, the smallest number that filters transient
+consecutive failures, two by default, the smallest number that filters transient
 noise while still catching a real outage within one interval.
 
 **Recovery is asymmetric, on purpose.** A single success closes the incident
@@ -63,13 +63,13 @@ last N rows cannot.
 ## Probing hostile URLs
 
 The prober does one thing: ask a URL what it says, right now. No retries, no queue,
-no database — so the retry policy lives in one place and this stays testable.
+no database, so the retry policy lives in one place and this stays testable.
 
 It never throws. "The site is down" is a normal outcome for this service, not an
 exception, so every failure mode comes back as a result the caller can record.
 
-Node's `fetch` errors are unhelpful by default — a DNS failure and an aborted request
-both surface as `TypeError: fetch failed` — so failures are translated into something
+Node's `fetch` errors are unhelpful by default, a DNS failure and an aborted request
+both surface as `TypeError: fetch failed`, so failures are translated into something
 a person can act on: *Hostname could not be resolved*, *Connection refused*, *TLS
 certificate has expired*, *No response within 10000ms*.
 
@@ -87,10 +87,10 @@ timer per monitor would have to be rebuilt whenever a monitor changed.
 - **Due-ness is computed in SQL**, because `last_checked_at + interval_sec` is a
   per-row comparison the query builder cannot express.
 - **Probes run in batches of ten.** Each is mostly idle waiting on the network, so
-  this is not about CPU — it bounds open sockets and database connections. Five
+  this is not about CPU, it bounds open sockets and database connections. Five
   hundred at once would exhaust the connection pool long before the event loop.
 - **A slow sweep skips the next tick** rather than running twice and double-probing.
-- **`allSettled`, not `all`** — one monitor throwing unexpectedly must not abandon
+- **`allSettled`, not `all`**, one monitor throwing unexpectedly must not abandon
   the rest of the batch.
 - **`WORKER_ENABLED=false`** runs the same image as an API-only process, so scaling
   the API to two instances does not probe everything twice.
@@ -100,7 +100,7 @@ timer per monitor would have to be rebuilt whenever a monitor changed.
 Both were found by running the thing rather than by reading it.
 
 **`No response within undefinedms`.** The due-ness query is raw SQL, and Prisma's
-`$queryRaw` bypasses the `@map` translation in the schema — it returns raw
+`$queryRaw` bypasses the `@map` translation in the schema, it returns raw
 `snake_case` columns. Casting that to `Monitor[]` type-checked perfectly while
 leaving every camelCase field `undefined` at runtime, so the prober was called with
 `timeoutMs: undefined` and every probe aborted instantly. The query now selects ids
@@ -118,19 +118,19 @@ Neither would have been caught by a unit test with a mocked database or a stubbe
 
 90 tests. No mocked database and no stubbed HTTP:
 
-- **`check-runner.service.spec.ts`** — incident derivation against real Postgres.
+- **`check-runner.service.spec.ts`**, incident derivation against real Postgres.
   The prober is the one thing stubbed, because the cases are about what a *sequence*
   of results does to the incidents table.
-- **`prober.service.spec.ts`** — real HTTP against a server on localhost, so
+- **`prober.service.spec.ts`**, real HTTP against a server on localhost, so
   timeouts really time out and refused connections are really refused.
-- **`scheduler.service.spec.ts`** — which monitors a sweep picks up, including the
+- **`scheduler.service.spec.ts`**, which monitors a sweep picks up, including the
   interval arithmetic, which only means anything against a real database.
-- **`monitors.e2e-spec.ts`** — the API over HTTP through the real pipeline:
+- **`monitors.e2e-spec.ts`**, the API over HTTP through the real pipeline:
   validation, guards, serialisation. This is where a missing guard shows up, and
   where the SSRF rejections are asserted end to end.
-- **`address-guard.service.spec.ts`** — every address range that must be refused,
+- **`address-guard.service.spec.ts`**, every address range that must be refused,
   including the ones `IsUrl` waves through.
-- **`throttling.e2e-spec.ts`** — the rate limits, with throttling deliberately
+- **`throttling.e2e-spec.ts`**, the rate limits, with throttling deliberately
   left on, because the API suite turns it off and a broken limit would otherwise
   pass CI unnoticed.
 
@@ -142,14 +142,14 @@ data you were looking at.
 Small things, all deliberate:
 
 - **bcrypt at cost 12**, and the password is capped at 72 bytes because bcrypt
-  silently ignores anything beyond that — an uncapped field makes long passwords
+  silently ignores anything beyond that, an uncapped field makes long passwords
   weaker than they look.
 - **Login compares against a dummy hash when the user does not exist**, so the
   response time cannot be used to enumerate accounts.
 - **Another user's monitor returns 404, not 403.** A 403 confirms the id exists.
 - **The JWT is not trusted for identity.** The user is re-read on every request, so a
   deleted account stops working immediately rather than at token expiry.
-- **Unknown request fields are rejected**, not ignored — otherwise a client could
+- **Unknown request fields are rejected**, not ignored, otherwise a client could
   send `userId` and create a monitor belonging to somebody else. There is a test for
   exactly that.
 - **URLs are checked against the resolved address, not the hostname.** The server
@@ -196,7 +196,7 @@ docker build -t pulse-api ./     # same image CI builds
 ```
 
 Migrations run on container start via `prisma migrate deploy`, which only applies
-committed migrations — it never generates or resets, so it is safe on every boot.
+committed migrations, it never generates or resets, so it is safe on every boot.
 
 ## Deployment
 
@@ -236,7 +236,7 @@ flyctl deploy --remote-only    # or let CI do it on merge to main
 
 `/api/monitors/summary` is one endpoint doing three queries rather than N+1 per
 monitor, because the dashboard reloads often. A never-probed monitor reports
-`pending` with `uptime24h: null` — an unmeasured monitor is not a perfect one.
+`pending` with `uptime24h: null`, an unmeasured monitor is not a perfect one.
 
 ## Known gaps
 
