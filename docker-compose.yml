@@ -1,0 +1,26 @@
+# Local Postgres for development and for the integration tests.
+#
+# Two databases on one server: `pulse` for development, `pulse_test` for the test
+# suite, so a test run never truncates data you were looking at.
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: pulse-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pulse
+      POSTGRES_PASSWORD: pulse
+      POSTGRES_DB: pulse
+    ports:
+      - '5433:5432' # 5433 on the host, to avoid clashing with a local Postgres
+    volumes:
+      - pulse-db-data:/var/lib/postgresql/data
+      - ./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U pulse -d pulse']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pulse-db-data:

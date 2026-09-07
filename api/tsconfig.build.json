@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  // prisma.config.ts lives at the project root and is only ever run by the Prisma
+  // CLI. Leaving it in widened the rootDir to the project root, so the compiler
+  // emitted dist/src/main.js instead of dist/main.js.
+  "exclude": [
+    "node_modules",
+    "test",
+    "dist",
+    "**/*spec.ts",
+    "prisma.config.ts"
+  ]
+}

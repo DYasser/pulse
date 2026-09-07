@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+*.log
+
+# Secrets. .env.example and .env.test are committed; .env is not.
+.env
+.env.local
+.env.*.local
+
+.DS_Store
+Thumbs.db
+.idea/
