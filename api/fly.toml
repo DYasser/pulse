@@ -55,4 +55,7 @@ primary_region = 'yyz' # Toronto
 # racing across every instance on boot.
 [deploy]
   release_command = 'npx prisma migrate deploy'
-  max_unavailable = 1
+  # With one machine there is nothing to roll: immediate replaces it in place
+  # rather than waiting for a second machine that will never exist. Fly warns that
+  # max_unavailable is meaningless without a rolling strategy, so it is gone.
+  strategy = 'immediate'
