@@ -4,6 +4,8 @@ An uptime monitor. You register URLs; a background worker probes them on their o
 schedules, records every result, and turns streaks of failures into incidents you can
 read as periods of downtime rather than a pile of events.
 
+**Live API: https://pulse-uptime.fly.dev/api/health**
+
 [![CI](https://github.com/DYasser/pulse/actions/workflows/ci.yml/badge.svg)](https://github.com/DYasser/pulse/actions/workflows/ci.yml)
 
 NestJS · TypeScript · PostgreSQL · Prisma · Docker
@@ -195,6 +197,25 @@ docker build -t pulse-api ./     # same image CI builds
 
 Migrations run on container start via `prisma migrate deploy`, which only applies
 committed migrations — it never generates or resets, so it is safe on every boot.
+
+## Deployment
+
+Runs on Fly.io against Neon Postgres, deployed by CI once tests pass.
+
+- **One machine, always on.** Fly adds a second for high availability by default,
+  and both would run the scheduler - every monitor probed twice, doubling traffic
+  to the sites being watched and corrupting the uptime denominators. Scaling out
+  safely needs `WORKER_ENABLED=false` on the extras, or claim-based scheduling.
+- **Never suspends.** `auto_stop_machines = 'off'`: a monitor that scales to zero
+  stops monitoring, so the usual serverless default is exactly backwards here.
+- **Migrations run once per deploy** as a Fly `release_command`, in a short-lived
+  machine, rather than racing across instances on boot.
+- **Health checks hit the database**, so Fly restarts a machine that can still
+  serve HTTP but has lost Postgres.
+
+```bash
+flyctl deploy --remote-only    # or let CI do it on merge to main
+```
 
 ## API
 

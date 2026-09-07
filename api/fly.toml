@@ -9,10 +9,6 @@ primary_region = 'yyz' # Toronto
 [build]
   dockerfile = 'Dockerfile'
 
-# Migrations run once per deploy, in their own short-lived machine, rather than
-# racing across every instance on boot.
-[deploy]
-  release_command = 'npx prisma migrate deploy'
 
 [env]
   PORT = '3000'
@@ -49,3 +45,14 @@ primary_region = 'yyz' # Toronto
 [[vm]]
   size = 'shared-cpu-1x'
   memory = '512mb'
+
+# One machine, deliberately. Fly adds a second for high availability by default,
+# and both would run the scheduler - every monitor probed twice, doubling traffic
+# to the sites being watched and corrupting the uptime denominators. Scaling out
+# safely needs WORKER_ENABLED=false on the extras, or claim-based scheduling with
+# SELECT ... FOR UPDATE SKIP LOCKED.
+# Migrations run once per deploy in their own short-lived machine, rather than
+# racing across every instance on boot.
+[deploy]
+  release_command = 'npx prisma migrate deploy'
+  max_unavailable = 1
